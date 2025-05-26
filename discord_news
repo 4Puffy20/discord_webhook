@@ -1,0 +1,65 @@
+import requests
+from bs4 import BeautifulSoup
+import os
+
+WEBHOOK_URL = os.environ["DISCORD_WEBHOOK"]
+BASE_URL = "https://www.militarytimes.com"
+
+def get_article_links():
+    res = requests.get(BASE_URL)
+    soup = BeautifulSoup(res.text, "html.parser")
+    links = set()
+    for a in soup.find_all("a", href=True):
+        href = a['href']
+        if href.startswith("/") and "/202" in href:
+            links.add(BASE_URL + href)
+    return list(links)
+
+def get_article_content(url):
+    res = requests.get(url)
+    soup = BeautifulSoup(res.text, "html.parser")
+    headline = soup.find("h1")
+    summary = soup.find("meta", {"name": "description"})
+    body_blocks = soup.find_all("div", class_="article-body") or soup.find_all("div", class_="c-article-body")
+    text = ""
+    for block in body_blocks:
+        paragraphs = block.find_all("p")
+        for p in paragraphs:
+            text += p.get_text(strip=True) + "\n"
+    content = f"**{headline.get_text(strip=True) if headline else ''}**\n"
+    content += f"*{summary['content']}*\n\n" if summary and summary.get("content") else ""
+    content += text.strip()
+    return content[:1900] if content else ""
+
+def load_posted():
+    posted = set()
+    if os.path.exists("posted.txt"):
+        with open("posted.txt") as f:
+            posted = set(line.strip() for line in f)
+    return posted
+
+def save_posted(posted):
+    with open("posted.txt", "w") as f:
+        for url in posted:
+            f.write(url + "\n")
+
+def send_to_discord(content, url):
+    payload = {
+        "content": content + f"\n<{url}>"
+    }
+    r = requests.post(WEBHOOK_URL, json=payload)
+    return r.status_code == 204 or r.status_code == 200
+
+def main():
+    posted = load_posted()
+    links = get_article_links()
+    new_links = [link for link in links if link not in posted]
+    for link in new_links:
+        content = get_article_content(link)
+        if content:
+            send_to_discord(content, link)
+            posted.add(link)
+    save_posted(posted)
+
+if __name__ == "__main__":
+    main()
